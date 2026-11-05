@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -34,12 +35,15 @@ class MainActivity : ComponentActivity() {
     private fun handleOAuthIntent(intent: Intent?) {
         val uri = intent?.data ?: return
         if (uri.scheme == "com.xtbtch4.tidaldownloader" && uri.host == "oauth") {
-            try {
-                val result = TidalApi.finishAuthorization(this, uri)
-                OAuthUiState.message = result
-                OAuthUiState.connected = true
-            } catch (e: Exception) {
-                OAuthUiState.message = e.message ?: "Ошибка авторизации"
+            lifecycleScope.launch {
+                try {
+                    val result = withContext(Dispatchers.IO) { TidalApi.finishAuthorization(this@MainActivity, uri) }
+                    OAuthUiState.message = result
+                    OAuthUiState.connected = true
+                } catch (e: Exception) {
+                    OAuthUiState.message = e.message ?: "Ошибка авторизации"
+                    OAuthUiState.connected = false
+                }
             }
         }
     }
