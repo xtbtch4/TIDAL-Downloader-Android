@@ -1,100 +1,145 @@
 package com.xtbtch4.tidaldownloader
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { TidalDownloaderScreen() }
+        handleOAuthIntent(intent)
+        setContent { TidalScreen() }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleOAuthIntent(intent)
+    }
+
+    private fun handleOAuthIntent(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme == "com.xtbtch4.tidaldownloader" && uri.host == "oauth") {
+            try {
+                val result = TidalApi.finishAuthorization(this, uri)
+                OAuthUiState.message = result
+                OAuthUiState.connected = true
+            } catch (e: Exception) {
+                OAuthUiState.message = e.message ?: "Ошибка авторизации"
+            }
+        }
     }
 }
 
+private object OAuthUiState {
+    var message by mutableStateOf("Для работы с каталогом нужен TIDAL Developer Client ID.")
+    var connected by mutableStateOf(false)
+}
+
 @Composable
-private fun TidalDownloaderScreen() {
-    val links = remember { mutableStateListOf<String>() }
-    var input by remember { mutableStateOf("") }
-    var quality by remember { mutableStateOf("Lossless") }
-    var menuOpen by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf("Добавь ссылку на альбом, трек или плейлист TIDAL.") }
+private fun TidalScreen() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var clientId by remember { mutableStateOf("") }
+    var link by remember { mutableStateOf("") }
+    var result by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
 
     MaterialTheme {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Scaffold { padding ->
             Column(
-                Modifier.fillMaxSize().padding(20.dp),
+                Modifier.fillMaxSize().padding(padding).padding(18.dp)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text("TIDAL Downloader", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text("Android • версия 0.1.0", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Ссылка TIDAL", fontWeight = FontWeight.SemiBold)
+                Text("Android • 0.2.0", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Card {
+                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("1. Подключение TIDAL", style = MaterialTheme.typography.titleMedium)
                         OutlinedTextField(
-                            value = input,
-                            onValueChange = { input = it },
+                            value = clientId,
+                            onValueChange = { clientId = it },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("https://tidal.com/browse/album/...") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
+                            label = { Text("TIDAL Developer Client ID") },
+                            singleLine = true
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Качество: ")
-                            TextButton(onClick = { menuOpen = true }) { Text(quality) }
-                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                listOf("High", "Lossless", "Hi-Res").forEach { option ->
-                                    DropdownMenuItem(text = { Text(option) }, onClick = { quality = option; menuOpen = false })
-                                }
-                            }
-                            Spacer(Modifier.weight(1f))
-                            Button(onClick = {
-                                val candidate = input.trim()
-                                if (candidate.startsWith("https://") &&
-                                    (candidate.contains("tidal.com/") || candidate.contains("listen.tidal.com/"))) {
-                                    if (!links.contains(candidate)) links.add(candidate)
-                                    input = ""
-                                    message = "Ссылка добавлена в список."
+                        Button(
+                            onClick = {
+                                if (clientId.isBlank()) {
+                                    OAuthUiState.message = "Введи Client ID из TIDAL Developer Portal."
                                 } else {
-                                    message = "Вставь корректную HTTPS-ссылку TIDAL."
+                                    val url = TidalApi.createAuthorizationUrl(context, clientId)
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                                 }
-                            }) { Text("Добавить") }
-                        }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Войти через TIDAL") }
+                        Text(
+                            if (OAuthUiState.connected) "Подключено" else OAuthUiState.message,
+                            color = if (OAuthUiState.connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "В Developer Portal зарегистрируй Redirect URI: ${TidalApi.REDIRECT_URI}. Авторизация выполняется OAuth 2.1 + PKCE; пароль приложение не запрашивает.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
-                Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Очередь", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.weight(1f))
-                    Text("${links.size} ссылок")
-                    TextButton(onClick = { links.clear(); message = "Очередь очищена." }) { Text("Очистить") }
-                }
-                if (links.isEmpty()) {
-                    Text("Очередь пока пуста.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        itemsIndexed(links) { index, link ->
-                            Card {
-                                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text("${index + 1}. $link", modifier = Modifier.weight(1f), maxLines = 2)
-                                    TextButton(onClick = { links.remove(link) }) { Text("Удалить") }
+                Card {
+                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("2. Проверка ссылки", style = MaterialTheme.typography.titleMedium)
+                        OutlinedTextField(
+                            value = link,
+                            onValueChange = { link = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Ссылка на трек или альбом") },
+                            placeholder = { Text("https://tidal.com/browse/track/...") },
+                            singleLine = true
+                        )
+                        Button(
+                            enabled = !busy && OAuthUiState.connected,
+                            onClick = {
+                                busy = true
+                                result = ""
+                                scope.launch {
+                                    result = try {
+                                        withContext(Dispatchers.IO) { TidalApi.inspectLink(link) }
+                                    } catch (e: Exception) {
+                                        e.message ?: "Ошибка запроса"
+                                    }
+                                    busy = false
                                 }
-                            }
-                        }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(if (busy) "Запрос..." else "Получить данные из TIDAL") }
+                    }
+                }
+                if (result.isNotBlank()) {
+                    Card {
+                        Text(
+                            result,
+                            Modifier.fillMaxWidth().padding(14.dp),
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
                 Text(
-                    "Начальная версия интерфейса: ссылки добавляются в очередь, но загрузка музыки пока не реализована. Подключение возможно только через разрешённые способы доступа к контенту TIDAL; обход DRM не поддерживается.",
+                    "Это первый рабочий этап интеграции: OAuth-вход и чтение метаданных через официальный TIDAL Web API. Загрузка защищённых аудиопотоков и обход DRM не реализованы.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
